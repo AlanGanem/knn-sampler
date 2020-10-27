@@ -1,4 +1,5 @@
 from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
@@ -16,27 +17,88 @@ class KNNSampler():
     def __init__(self, **kwargs):
         self.sampler = NearestNeighbors(**kwargs)
 
-    def fit(self, df, X_columns, y_columns):
-        X = df[X_columns]
-        self.y = df[y_columns]
-        self.X_columns = X_columns
+    def _fit_scaler(self, X, scaler, init_args = {}, fit_args = {}):
+
+        if not scaler is None:
+            avalible_scalers = {'minmaxscaler':MinMaxScaler,'standardscaler':StandardScaler, 'robustscaler':RobustScaler}
+            if scaler.__class__ == str:
+                scaler = avalible_scalers[scaler.lower()]()
+            scaler.fit(X, **fit_args)
+        else:
+            #keep scaler as none
+            pass
+        return scaler
+
+    def _transform_scaler(self, X, scaler, transform_args = {}):
+
+        if not scaler is None:
+            return scaler.transform(X, **transform_args)
+        else:
+            return X
+
+    def fit(self, data, X_columns, y_columns, feature_weights,
+            scaler = None, scaler_init_args = {},scaler_fit_args = {}):
+
+        #handle feature weights
+        if feature_weights.__class__ in [list,set,tuple]:
+            feature_weights = {list(X_columns)[i]:feature_weights[i] for i in range(len(feature_weights))}
+        elif feature_weights.__class__ == dict:
+            if set(feature_weights) != set(X_columns):
+                raise ValueError('"feature_weights" keys must match exactly "X_columns"')
+            #order the dict according to X_columns
+            feature_weights = {k:feature_weights[k] for k in X_columns}
+        elif feature_weights.__class__ != dict:
+            raise TypeError(f'feature_weights must be one of [dict,list,tuple,set], not {feature_weights.__class__}')
+
+        # transform feature weights dict into an array in the correct order
+        feature_weights_array = np.array([v for k, v in feature_weights.items()])
+
+        # fit scaler
+        scaler = self._fit_scaler(X=data[X_columns], scaler=scaler,
+                                       init_args=scaler_init_args, fit_args=scaler_fit_args)
+        #transform inputs
+        X = self._transform_scaler(data[X_columns].values, scaler)
+        #multiply X by feature weights
+        X = X*feature_weights_array
+        #fit sampler
         self.sampler.fit(X)
+
+        #save states
+        self.scaler = scaler
+        self.feature_weights_array = feature_weights_array
+        self.feature_weights = feature_weights
+        self.y = data[y_columns]
+        self.X_columns = X_columns
+
         return self
 
-    def sample(self, df, sampling_weights = None, n_draws = 30 ,replace = True, pandas_sampling_args = {}, **kneighbors_args):
+    def sample(self, data, sampling_weights = None, n_draws = 30 ,replace = True, pandas_sampling_args = {}, **kneighbors_args):
+        #transform inputs
         # accept data frames or different types of arrays
-        if df.__class__ == pd.DataFrame:
-            neighbors = self.sampler.kneighbors(df[self.X_columns] ,**kneighbors_args)
+        if data.__class__ == pd.DataFrame:
+            #multiply feature weights
+            X = data[self.X_columns].values
         else:
-            neighbors = self.sampler.kneighbors(df ,**kneighbors_args)
+            # multiply feature weights
+            X = data
+
+        #scale inputs
+        X = self._transform_scaler(X,self.scaler)
+        #apply weights
+        X = X*self.feature_weights_array
+        #sample
+        neighbors = self.sampler.kneighbors(X, **kneighbors_args)
 
         distances = neighbors[0]
         indexes = neighbors[1]
         samples = []
         for row ,distance in tqdm(list(zip(indexes ,distances))):
             sample_weights = self._handle_weights(distance, sampling_weights)
-            sample = self.y.iloc[row.flatten()].sample(n = n_draws, replace = replace, weights = sample_weights, **pandas_sampling_args).values.flatten().tolist()
+            sample = self.y.iloc[row.flatten()].sample(
+                n = n_draws, replace = replace, weights = sample_weights, **pandas_sampling_args
+            ).values.tolist()
             samples.append(sample)
+        samples = np.array(samples)
         return samples
 
     def _handle_weights(self, distances, sampling_weights):
@@ -52,70 +114,3 @@ class KNNSampler():
                 sampling_weights = None
 
         return sampling_weights
-
-class GroupwiseMixIn:
-
-    def __init__(self, estimator, df, group_columns):
-        '''
-        init saves states of group instances, group columns and will create a dictinoary of estimators
-        to create new estimators in the dict, you need to create a new instance of GroupwiseMixIn
-        '''
-        groupby_obj = df.groupby(group_columns)
-        self.estimators = {grp: copy.deepcopy(
-            estimator) for grp, _ in groupby_obj}
-        self.group_columns = group_columns
-        self.base_estimator = copy.deepcopy(estimator)
-        return
-
-    def __getitem__(self, item):
-        '''
-        used for retrieving estimators for each group
-        '''
-        try:
-            return self.estimators[item]
-        except KeyError:
-            if type(item) == int:
-                return (list(self.estimators)[item], self.estimators[list(self.estimators)[item]])
-            else:
-                raise
-
-    def __getattr__(self,item):
-        '''used for calling estimator methods for all groups'''
-        return partial(self._apply,method = item)
-
-    def _apply(self, df=None, group_data_proc=None, error_handler='warn',method = None, proc_args={}, **kwargs):
-        '''
-        group_data_proc is a function that processes the input df (for each group) and outputs a dictinoary containing the pieces
-        of input extracted from the df. the keys of the dictinoary should be the inputs for the called method
-        '''
-        if not df is None:
-            groupby_obj = df.groupby(self.group_columns)
-            return_dict = {}
-            for grp, df in tqdm(groupby_obj):
-                try:
-                    method_inputs = group_data_proc(df, **proc_args)
-                    assert isinstance(method_inputs, dict)
-                    return_dict[grp] = getattr(self[grp], method)(
-                        **method_inputs, **kwargs)
-                except Exception as exc:
-                    if error_handler == 'coerce':
-                        pass
-                    elif error_handler == 'warn':
-                        print(f'Error with group {grp}: {repr(exc)}')
-                    else:
-                        raise
-        else:
-            return_dict = {}
-            for grp, obj in tqdm(self.estimators.items()):
-                try:
-                    return_dict[grp] = getattr(self[grp], method)(**proc_args, **kwargs)
-                except Exception as exc:
-                    if error_handler == 'coerce':
-                        pass
-                    elif error_handler == 'warn':
-                        print(f'Error with group {grp}: {repr(exc)}')
-                    else:
-                        raise
-
-        return return_dict
-
