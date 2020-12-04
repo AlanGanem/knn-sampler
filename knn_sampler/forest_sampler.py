@@ -2,6 +2,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, Extr
 from sklearn.preprocessing import RobustScaler, MinMaxScaler, StandardScaler
 from tqdm import tqdm
 import numpy as np
+import joblib
 
 
 class ForestSampler:
@@ -15,6 +16,12 @@ class ForestSampler:
     all the samples in the terminal nodes for each forest.
     '''
 
+    @classmethod
+    def load(cls, path):
+        return joblib.load(path)
+
+    def save(self, path):
+        joblib.dump(self, path)
 
     def __init__(self, output_type='numerical', forest_estimator='rf', **estimator_args):
         assert output_type in ['categorical', 'numerical']

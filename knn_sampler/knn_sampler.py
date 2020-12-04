@@ -98,12 +98,13 @@ class KNNSampler():
 
         return self
 
-    def sample(self, data, sampling_weights = None, n_draws = 30 ,replace = True, pandas_sampling_args = {}, **kneighbors_args):
+    def sample(self, data, sampling_weights = 'exp', n_draws = 30 ,replace = True, pandas_sampling_args = {}, **kneighbors_args):
         '''
         Samples from historical data based on feature proximity
 
         :param data: query data
-        :param sampling_weights: callable that recieves an array of distances and returns an array of sampling weights
+        :param sampling_weights: callable or str that maps to internal callable that recieves an array of distances
+         and returns an array of sampling weights for pd.DataFrame.sample method
         :param n_draws: number of sapmle draws
         :param replace: wether to sample with replacement or not
         :param pandas_sampling_args: kwargs for pandas.DataFrame.sample()
@@ -138,11 +139,24 @@ class KNNSampler():
         samples = np.array(samples)
         return samples
 
-    def _handle_weights(self, distances, sampling_weights):
+    def _exponential_smoothing_weightening(self,x, w = 1):
+        return np.exp(w * (1 - (x - x.min()) / (x.max() - x.min()))).flatten()
+
+    def _handle_weights(self, distances, sampling_weights, **sample_weights_args):
+        # define avalbile wieghtening functions
+        avalible_wieghtening_functions = {
+            'exp': self._exponential_smoothing_weightening
+        }
+        # grab wightening function from avalible ones
+        if type(sampling_weights) == str:
+            try:
+                sampling_weights = avalible_wieghtening_functions[sampling_weights]
+            except KeyError:
+                raise ValueError(f'If Str, sampling_weights must be one of {list(avalible_wieghtening_functions)}')
 
         if not sampling_weights is None:
             if callable(sampling_weights):
-                sampling_weights = sampling_weights(distances)
+                sampling_weights = sampling_weights(distances, **sample_weights_args)
                 sampling_weights = np.nan_to_num(sampling_weights, copy=True, nan=0.0, posinf=999, neginf=-999)
             else:
                 pass
