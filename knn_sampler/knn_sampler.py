@@ -6,7 +6,21 @@ import pandas as pd
 from functools import partial
 import copy
 
+
 class KNNSampler():
+    '''
+    KNNSampler is a data sampler and conditional distribution estimator based on data proximity.
+    it follows a fit-sample (akin to sklearns fit-transform) paradgim.
+
+    it's made to be userfriendly and accepts dataframes as inputs.
+
+    the strategy is to fit the sampler based on some features and associate these features with user defined weights.
+    Than, during the sampling process, the new data is going to be queried on historical data and return samples
+    from trainning set according to a function of the distance of the inference features to the fitted data. this
+    function returns the probability of sampling a point, based on the distance matrix of the queried point to the
+    fitted data. This function can be defined by the user, otherwise it will assume a unform sampling probabilty
+    distribution.
+    '''
     @classmethod
     def load(cls, path):
         return joblib.load(path)
@@ -36,11 +50,23 @@ class KNNSampler():
         else:
             return X
 
-    def fit(self, data, X_columns, y_columns, feature_weights,
+    def fit(self, data, X_columns, y_columns, feature_weights = None,
             scaler = None, scaler_init_args = {},scaler_fit_args = {}):
 
+        '''
+        :param data: DataFrame of data to fit
+        :param X_columns: features to be queried
+        :param y_columns: values returned by queries
+        :param feature_weights: user defined feature weights
+        :param scaler: features scaler. Str of one of the sklearn scalers (MinMaxScaler, StandardScaler, RobustScaler)
+        :param scaler_init_args: scaler initializing args
+        :param scaler_fit_args: scaler fitting args
+        :return: KNNSampler fitted instance
+        '''
         #handle feature weights
-        if feature_weights.__class__ in [list,set,tuple]:
+        if feature_weights is None:
+            feature_weights = {i:1 for i in X_columns}
+        elif feature_weights.__class__ in [list,set,tuple]:
             feature_weights = {list(X_columns)[i]:feature_weights[i] for i in range(len(feature_weights))}
         elif feature_weights.__class__ == dict:
             if set(feature_weights) != set(X_columns):
@@ -73,6 +99,17 @@ class KNNSampler():
         return self
 
     def sample(self, data, sampling_weights = None, n_draws = 30 ,replace = True, pandas_sampling_args = {}, **kneighbors_args):
+        '''
+        Samples from historical data based on feature proximity
+
+        :param data: query data
+        :param sampling_weights: callable that recieves an array of distances and returns an array of sampling weights
+        :param n_draws: number of sapmle draws
+        :param replace: wether to sample with replacement or not
+        :param pandas_sampling_args: kwargs for pandas.DataFrame.sample()
+        :param kneighbors_args: kwargs for NearestNeighbors.kneighbors()
+        :return: an array containing row(query data index) X columns (samples for each query) X channels (sampled features)
+        '''
         #transform inputs
         # accept data frames or different types of arrays
         if data.__class__ == pd.DataFrame:
