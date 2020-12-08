@@ -1,5 +1,5 @@
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, ExtraTreesRegressor, ExtraTreesClassifier
-from sklearn.preprocessing import RobustScaler, MinMaxScaler, StandardScaler
+from sklearn.preprocessing import RobustScaler, MinMaxScaler, StandardScaler, PowerTransformer, QuantileTransformer
 from tqdm import tqdm
 import numpy as np
 import joblib
@@ -44,10 +44,14 @@ class ForestSampler:
     def _fit_scaler(self, X, scaler, init_args={}, fit_args={}):
 
         if not scaler is None:
-            avalible_scalers = {'minmaxscaler': MinMaxScaler, 'standardscaler': StandardScaler,
-                                'robustscaler': RobustScaler}
+            avalible_scalers = {'minmaxscaler': MinMaxScaler(),
+                                'standardscaler': StandardScaler(),
+                                'robustscaler': RobustScaler(),
+                                'quantiletransformer':QuantileTransformer(output_distribution = 'normal'),
+                                'powertransformer':PowerTransformer()
+                                }
             if scaler.__class__ == str:
-                scaler = avalible_scalers[scaler.lower()]()
+                scaler = avalible_scalers[scaler.lower()]
             scaler.fit(X, **fit_args)
         else:
             # keep scaler as none
@@ -63,6 +67,7 @@ class ForestSampler:
 
     def fit(self, data, X_columns, y_columns, scaler=None, scaler_init_args={}):
         assert not '_NODE' in y_columns
+        if y_columns.__class__ == str: y_columns = [y_columns]
 
         X = data[X_columns]
         y = data[y_columns]
